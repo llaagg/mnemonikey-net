@@ -1,0 +1,169 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  DOTNET_VERSION: '8.0.x'
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  test:
+    name: Test on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+    
+    - name: Restore dependencies
+      run: dotnet restore
+    
+    - name: Build
+      run: dotnet build --no-restore --configuration Release
+    
+    - name: Test
+      run: dotnet test --no-build --configuration Release --verbosity normal --collect:"XPlat Code Coverage"
+    
+    - name: Upload coverage reports
+      if: matrix.os == 'ubuntu-latest'
+      uses: codecov/codecov-action@v3
+      with:
+        files: '**/coverage.cobertura.xml'
+        fail_ci_if_error: true
+
+  compatibility-test:
+    name: Cross-compatibility Test
+    runs-on: ubuntu-latest
+    needs: test
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+    
+    - name: Setup Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.20'
+    
+    - name: Clone original mnemonikey
+      run: |
+        git clone https://github.com/kklash/mnemonikey.git /tmp/mnemonikey-go
+        cd /tmp/mnemonikey-go
+        go build -o mnemonikey ./cmd/mnemonikey
+    
+    - name: Build C# implementation
+      run: |
+        dotnet build --configuration Release
+        dotnet publish src/MnemonikeyCs.Cli/MnemonikeyCs.Cli.csproj -c Release -o ./publish
+    
+    - name: Run compatibility tests
+      run: |
+        # This will run tests that verify C# can decode what Go generates and vice versa
+        dotnet test tests/MnemonikeyCs.Tests/MnemonikeyCs.Tests.csproj --filter Category=Compatibility
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: test
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Run Security Scan
+      uses: securecodewarrior/github-action-add-sarif@v1
+      with:
+        sarif-file: security-scan-results.sarif
+    
+    - name: Run DevSkim
+      uses: microsoft/devskim-action@v1
+      with:
+        directory-to-scan: ./src
+
+  package:
+    name: Package and Publish
+    runs-on: ubuntu-latest
+    needs: [test, compatibility-test, security-scan]
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+    
+    - name: Determine Version
+      id: version
+      run: |
+        # Use GitVersion or similar tool to determine version
+        echo "VERSION=1.0.0-preview.${GITHUB_RUN_NUMBER}" >> $GITHUB_OUTPUT
+    
+    - name: Package Library
+      run: |
+        dotnet pack src/MnemonikeyCs/MnemonikeyCs.csproj \
+          --configuration Release \
+          --output ./packages \
+          -p:Version=${{ steps.version.outputs.VERSION }}
+    
+    - name: Package CLI Tool
+      run: |
+        dotnet pack src/MnemonikeyCs.Cli/MnemonikeyCs.Cli.csproj \
+          --configuration Release \
+          --output ./packages \
+          -p:Version=${{ steps.version.outputs.VERSION }}
+    
+    - name: Publish to NuGet (Preview)
+      if: github.ref == 'refs/heads/develop'
+      run: |
+        dotnet nuget push ./packages/*.nupkg \
+          --api-key ${{ secrets.NUGET_API_KEY }} \
+          --source https://api.nuget.org/v3/index.json \
+          --skip-duplicate
+    
+    - name: Create Release Binaries
+      run: |
+        # Build self-contained executables for multiple platforms
+        platforms=("win-x64" "linux-x64" "osx-x64" "osx-arm64")
+        for platform in "${platforms[@]}"; do
+          dotnet publish src/MnemonikeyCs.Cli/MnemonikeyCs.Cli.csproj \
+            --configuration Release \
+            --runtime $platform \
+            --self-contained true \
+            --output ./releases/$platform \
+            -p:PublishSingleFile=true \
+            -p:Version=${{ steps.version.outputs.VERSION }}
+          
+          # Create archives
+          cd ./releases/$platform
+          if [[ $platform == win-* ]]; then
+            zip -r ../mnemonikey-cs-$platform.zip .
+          else
+            tar -czf ../mnemonikey-cs-$platform.tar.gz .
+          fi
+          cd ../..
+        done
+    
+    - name: Upload Release Artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: release-binaries
+        path: ./releases/*.{zip,tar.gz}
