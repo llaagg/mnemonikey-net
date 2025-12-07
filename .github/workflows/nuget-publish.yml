@@ -1,0 +1,91 @@
+name: Publish to NuGet
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (e.g., 1.0.0)'
+        required: true
+        type: string
+
+env:
+  DOTNET_VERSION: '9.0.x'
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  publish:
+    name: Build and Publish to NuGet
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+    
+    - name: Determine Version
+      id: version
+      run: |
+        if [ "${{ github.event_name }}" = "release" ]; then
+          # Extract version from release tag (remove 'v' prefix if present)
+          VERSION="${{ github.event.release.tag_name }}"
+          VERSION="${VERSION#v}"
+        else
+          # Use manually provided version
+          VERSION="${{ inputs.version }}"
+        fi
+        echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+        echo "Publishing version: $VERSION"
+    
+    - name: Restore dependencies
+      run: dotnet restore
+    
+    - name: Build
+      run: dotnet build --configuration Release --no-restore
+    
+    - name: Run tests
+      run: dotnet test --configuration Release --no-build --verbosity normal
+    
+    - name: Pack MnemonikeyCs Library
+      run: |
+        dotnet pack src/MnemonikeyCs/MnemonikeyCs.csproj \
+          --configuration Release \
+          --no-build \
+          --output ./packages \
+          -p:PackageVersion=${{ steps.version.outputs.VERSION }} \
+          -p:Version=${{ steps.version.outputs.VERSION }}
+    
+    - name: Pack MnemonikeyCs.Cli Tool
+      run: |
+        dotnet pack src/MnemonikeyCs.Cli/MnemonikeyCs.Cli.csproj \
+          --configuration Release \
+          --no-build \
+          --output ./packages \
+          -p:PackageVersion=${{ steps.version.outputs.VERSION }} \
+          -p:Version=${{ steps.version.outputs.VERSION }}
+    
+    - name: List packages
+      run: ls -la ./packages
+    
+    - name: Publish to NuGet.org
+      run: |
+        dotnet nuget push ./packages/*.nupkg \
+          --api-key ${{ secrets.NUGET_API_KEY }} \
+          --source https://api.nuget.org/v3/index.json \
+          --skip-duplicate
+      env:
+        NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+    
+    - name: Upload package artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: nuget-packages
+        path: ./packages/*.nupkg
+        retention-days: 90

@@ -7,7 +7,7 @@ on:
     branches: [ main ]
 
 env:
-  DOTNET_VERSION: '8.0.x'
+  DOTNET_VERSION: '9.0.x'
   DOTNET_NOLOGO: true
   DOTNET_CLI_TELEMETRY_OPTOUT: true
 
@@ -131,13 +131,12 @@ jobs:
           --output ./packages \
           -p:Version=${{ steps.version.outputs.VERSION }}
     
-    - name: Publish to NuGet (Preview)
-      if: github.ref == 'refs/heads/develop'
-      run: |
-        dotnet nuget push ./packages/*.nupkg \
-          --api-key ${{ secrets.NUGET_API_KEY }} \
-          --source https://api.nuget.org/v3/index.json \
-          --skip-duplicate
+    - name: Upload Package Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: nuget-packages-preview
+        path: ./packages/*.nupkg
+        retention-days: 30
     
     - name: Create Release Binaries
       run: |
@@ -163,7 +162,7 @@ jobs:
         done
     
     - name: Upload Release Artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: release-binaries
         path: ./releases/*.{zip,tar.gz}
