@@ -36,7 +36,7 @@ jobs:
     
     - name: Test
       run: |
-        dotnet test --no-build --configuration Release --verbosity normal --collect:"XPlat Code Coverage" --settings coverlet.runsettings --logger "console;verbosity=minimal" -- RunConfiguration.TestSessionTimeout=600000
+        dotnet test tests/MnemonikeyCs.Tests --no-build --configuration Release --verbosity normal --collect:"XPlat Code Coverage" --settings coverlet.runsettings --logger "console;verbosity=minimal" -- RunConfiguration.TestSessionTimeout=600000
       shell: bash
       env:
         DOTNET_CLI_UI_LANGUAGE: en-US
