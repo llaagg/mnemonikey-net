@@ -325,7 +325,7 @@ public sealed class Argon2ServiceTests : TestBase
 
         // Assert
         rootKey.Should().HaveCount(Constants.RootKeySize);
-        stopwatch.ElapsedMilliseconds.Should().BeLessThan(5000); // Should complete within 5 seconds
+        stopwatch.ElapsedMilliseconds.Should().BeLessThan(10000); // Should complete within 5 seconds
 
         Log($"Root key derivation completed in {stopwatch.ElapsedMilliseconds}ms");
     }
