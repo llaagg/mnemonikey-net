@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using NSec.Cryptography;
 
 namespace MnemonikeyCs.Pgp.Keys;
@@ -281,32 +282,54 @@ public abstract class Ed25519KeyBase : BaseKey
     {
         ThrowIfDisposed();
         
-        // Create the data to hash according to RFC 4880 Section 12.2
+        // Create the fingerprint according to RFC 4880 Section 12.2
+        // For Ed25519, we need to include: version, timestamp, algorithm, OID, and MPI-encoded public key point
+        
+        using var keyMaterialStream = new MemoryStream();
+        
+        // Write version
+        keyMaterialStream.WriteByte(4);
+        
+        // Write timestamp
         var timestamp = (uint)((DateTimeOffset)CreationTime).ToUnixTimeSeconds();
         var timestampBytes = BitConverter.GetBytes(timestamp);
         if (BitConverter.IsLittleEndian)
             Array.Reverse(timestampBytes);
-
-        // Build the fingerprint input: version (1 byte) + timestamp (4 bytes) + algorithm (1 byte) + key material length (2 bytes) + algorithm (1 byte) + key material
-        var keyMaterialLength = (ushort)(1 + _publicKeyBytes.Length); // Algorithm byte + key bytes
-        var keyMaterialLengthBytes = BitConverter.GetBytes(keyMaterialLength);
+        keyMaterialStream.Write(timestampBytes);
+        
+        // Write algorithm
+        keyMaterialStream.WriteByte((byte)Algorithm);
+        
+        // Write Ed25519 OID (1.3.6.1.4.1.11591.15.1)
+        var oid = new byte[] { 0x2B, 0x06, 0x01, 0x04, 0x01, 0xDA, 0x47, 0x0F, 0x01 };
+        keyMaterialStream.WriteByte((byte)oid.Length);
+        keyMaterialStream.Write(oid);
+        
+        // Write MPI-encoded public key with 0x40 prefix for EdDSA point
+        var keyPointWithPrefix = new byte[1 + _publicKeyBytes.Length];
+        keyPointWithPrefix[0] = 0x40; // EdDSA point prefix
+        _publicKeyBytes.CopyTo(keyPointWithPrefix, 1);
+        
+        // Calculate bit length for MPI encoding
+        var bitCount = keyPointWithPrefix.Length * 8;
+        keyMaterialStream.WriteByte((byte)((bitCount >> 8) & 0xFF));
+        keyMaterialStream.WriteByte((byte)(bitCount & 0xFF));
+        keyMaterialStream.Write(keyPointWithPrefix);
+        
+        // Build fingerprint hash input
+        var keyMaterialBytes = keyMaterialStream.ToArray();
+        
+        using var fingerprintStream = new MemoryStream();
+        fingerprintStream.WriteByte(0x99); // Packet tag for fingerprint
+        
+        var lengthBytes = BitConverter.GetBytes((ushort)keyMaterialBytes.Length);
         if (BitConverter.IsLittleEndian)
-            Array.Reverse(keyMaterialLengthBytes);
-
-        var fingerprintInput = new byte[1 + 4 + 1 + 2 + 1 + _publicKeyBytes.Length];
-        var offset = 0;
-
-        fingerprintInput[offset++] = 4; // Version 4
-        timestampBytes.CopyTo(fingerprintInput, offset);
-        offset += 4;
-        fingerprintInput[offset++] = (byte)Algorithm;
-        keyMaterialLengthBytes.CopyTo(fingerprintInput, offset);
-        offset += 2;
-        fingerprintInput[offset++] = (byte)Algorithm; // Algorithm again for key material
-        _publicKeyBytes.CopyTo(fingerprintInput, offset);
-
+            Array.Reverse(lengthBytes);
+        fingerprintStream.Write(lengthBytes);
+        fingerprintStream.Write(keyMaterialBytes);
+        
         using var sha256 = System.Security.Cryptography.SHA256.Create();
-        return sha256.ComputeHash(fingerprintInput);
+        return sha256.ComputeHash(fingerprintStream.ToArray());
     }
 
     /// <inheritdoc />

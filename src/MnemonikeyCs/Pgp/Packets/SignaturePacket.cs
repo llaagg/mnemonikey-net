@@ -289,12 +289,18 @@ public sealed class SignaturePacket
 
         if (key.Algorithm == PgpAlgorithm.Ed25519)
         {
-            // Ed25519: algorithm byte + key data
-            PacketSerializer.WriteMPI(keyData, new byte[] { (byte)key.Algorithm }.Concat(key.PublicKeyBytes).ToArray());
+            // Ed25519: OID + MPI-encoded public key with 0x40 prefix
+            var oid = new byte[] { 0x2B, 0x06, 0x01, 0x04, 0x01, 0xDA, 0x47, 0x0F, 0x01 };
+            keyData.WriteByte((byte)oid.Length);
+            keyData.Write(oid);
+            
+            // EdDSA public key point with 0x40 prefix
+            var keyPointWithPrefix = new byte[] { 0x40 }.Concat(key.PublicKeyBytes).ToArray();
+            PacketSerializer.WriteMPI(keyData, keyPointWithPrefix);
         }
         else if (key.Algorithm == PgpAlgorithm.Curve25519)
         {
-            // Curve25519: OID + key data
+            // Curve25519: OID + key data (no prefix)
             var curve25519Key = (Curve25519Subkey)key;
             var oid = new byte[] { 0x2B, 0x06, 0x01, 0x04, 0x01, 0x97, 0x55, 0x01, 0x05, 0x01 };
             keyData.WriteByte((byte)oid.Length);
@@ -333,8 +339,22 @@ public sealed class SignaturePacket
         output.WriteByte(hash[0]);
         output.WriteByte(hash[1]);
 
-        // Write signature
-        PacketSerializer.WriteMPI(output, SignatureBytes);
+        // Write signature (for Ed25519: R and S as separate MPIs)
+        if (PublicKeyAlgorithm == PgpAlgorithm.Ed25519)
+        {
+            // EdDSA signature is 64 bytes: 32 bytes R + 32 bytes S
+            if (SignatureBytes.Length != 64)
+                throw new InvalidOperationException($"Ed25519 signature must be 64 bytes, got {SignatureBytes.Length}");
+            
+            var r = SignatureBytes.Take(32).ToArray();
+            var s = SignatureBytes.Skip(32).Take(32).ToArray();
+            PacketSerializer.WriteMPI(output, r);
+            PacketSerializer.WriteMPI(output, s);
+        }
+        else
+        {
+            PacketSerializer.WriteMPI(output, SignatureBytes);
+        }
     }
 
     /// <summary>

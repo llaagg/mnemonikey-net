@@ -74,7 +74,7 @@ public class Program
             description: "Show version information");
 
         rootCommand.AddGlobalOption(verboseOption);
-        rootCommand.AddOption(versionOption);
+        //rootCommand.AddOption(versionOption);
 
         // Version handler
         rootCommand.SetHandler((bool version, bool verbose) =>

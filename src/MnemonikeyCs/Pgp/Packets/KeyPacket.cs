@@ -251,9 +251,17 @@ public sealed class KeyPacket
     /// <param name="output">The output stream.</param>
     private void WriteEd25519PublicKey(Stream output)
     {
-        // For Ed25519, write the key as MPI prefixed with algorithm identifier
-        var keyWithAlg = new byte[] { (byte)Algorithm }.Concat(PublicKeyBytes).ToArray();
-        PacketSerializer.WriteMPI(output, keyWithAlg);
+        // Ed25519 OID (1.3.6.1.4.1.11591.15.1)
+        var oid = new byte[] { 0x2B, 0x06, 0x01, 0x04, 0x01, 0xDA, 0x47, 0x0F, 0x01 };
+        
+        // Write OID length and OID
+        output.WriteByte((byte)oid.Length);
+        output.Write(oid);
+        
+        // For EdDSA, the public key point must be prefixed with 0x40
+        // as per RFC 4880bis section 5.5.5
+        var keyPointWithPrefix = new byte[] { 0x40 }.Concat(PublicKeyBytes).ToArray();
+        PacketSerializer.WriteMPI(output, keyPointWithPrefix);
     }
 
     /// <summary>
