@@ -62,8 +62,22 @@ public class GpgInteropTests : TestBase
         using var keySet = KeySet.Create(seed, userId);
         var armoredPrivateKey = keySet.ExportPrivateKeyArmored(null);
         var keyIdHex = BitConverter.ToString(keySet.KeyId).Replace("-", "");
+        var fingerprintHex = BitConverter.ToString(keySet.Fingerprint).Replace("-", "");
         
         Output.WriteLine($"Key ID: {keyIdHex}");
+        Output.WriteLine($"Fingerprint: {fingerprintHex}");
+        Output.WriteLine($"Master Key Creation Time: {keySet.CreationTime:yyyy-MM-dd HH:mm:ss}");
+        
+        // Debug: Check signatures
+        Output.WriteLine($"Signatures count: {keySet.Signatures.Count}");
+        foreach (var sig in keySet.Signatures)
+        {
+            var sigIssuerHex = BitConverter.ToString(sig.IssuerKeyId).Replace("-", "");
+            Output.WriteLine($"  Signature Type: {sig.SignatureType}, Issuer Key ID: {sigIssuerHex}");
+        }
+        
+        Output.WriteLine("\nArmored Key (first 1000 chars):");
+        Output.WriteLine(armoredPrivateKey.Substring(0, Math.Min(1000, armoredPrivateKey.Length)));
 
         // Create temp directory for GPG home
         var tempDir = Path.Combine(Path.GetTempPath(), "gpg-test-" + Guid.NewGuid().ToString());
@@ -71,9 +85,37 @@ public class GpgInteropTests : TestBase
         
         try
         {
-            // Import key into GPG
+            // First, use gpg --list-packets to see what GPG thinks is in the key
             var keyFile = Path.Combine(tempDir, "key.asc");
             await File.WriteAllTextAsync(keyFile, armoredPrivateKey);
+            
+            var listPacketsProcess = new Process
+            {
+                StartInfo = new ProcessStartInfo
+                {
+                    FileName = "gpg",
+                    Arguments = $"--list-packets \"{keyFile}\"",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                }
+            };
+            
+            listPacketsProcess.Start();
+            var packetsOutput = await listPacketsProcess.StandardOutput.ReadToEndAsync();
+            var packetsError = await listPacketsProcess.StandardError.ReadToEndAsync();
+            await listPacketsProcess.WaitForExitAsync();
+            
+            Output.WriteLine("\n=== GPG --list-packets output ===");
+            Output.WriteLine(packetsOutput);
+            if (!string.IsNullOrEmpty(packetsError))
+            {
+                Output.WriteLine("Errors:");
+                Output.WriteLine(packetsError);
+            }
+            
+            // Import key into GPG
             
             var importProcess = new Process
             {
@@ -122,13 +164,41 @@ public class GpgInteropTests : TestBase
                 Output.WriteLine("✓ Key successfully imported into GPG!");
             }
             
-            // Verify key is in keyring
+            // Verify key is in keyring with detailed output
+            // First check secret keys since we imported a private key
+            var listSecretProcess = new Process
+            {
+                StartInfo = new ProcessStartInfo
+                {
+                    FileName = "gpg",
+                    Arguments = $"--homedir \"{tempDir}\" --list-secret-keys --with-colons --with-fingerprint",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                }
+            };
+            
+            listSecretProcess.Start();
+            var secretOutput = await listSecretProcess.StandardOutput.ReadToEndAsync();
+            var secretError = await listSecretProcess.StandardError.ReadToEndAsync();
+            await listSecretProcess.WaitForExitAsync();
+            
+            Output.WriteLine("GPG List Secret Keys Output:");
+            Output.WriteLine(secretOutput);
+            if (!string.IsNullOrEmpty(secretError))
+            {
+                Output.WriteLine("GPG List Secret Keys Errors:");
+                Output.WriteLine(secretError);
+            }
+            
+            // Then check public keys
             var listProcess = new Process
             {
                 StartInfo = new ProcessStartInfo
                 {
                     FileName = "gpg",
-                    Arguments = $"--homedir \"{tempDir}\" --list-keys",
+                    Arguments = $"--homedir \"{tempDir}\" --list-keys --with-colons --with-fingerprint",
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                     UseShellExecute = false,
@@ -138,20 +208,93 @@ public class GpgInteropTests : TestBase
             
             listProcess.Start();
             var listOutput = await listProcess.StandardOutput.ReadToEndAsync();
+            var listError = await listProcess.StandardError.ReadToEndAsync();
             await listProcess.WaitForExitAsync();
             
-            Output.WriteLine("GPG List Keys Output:");
+            Output.WriteLine("\nGPG List Public Keys Output:");
             Output.WriteLine(listOutput);
-            
-            // Check if GPG fully recognized the key
-            if (string.IsNullOrWhiteSpace(listOutput) || !listOutput.Contains(userId.Email ?? string.Empty))
+            if (!string.IsNullOrEmpty(listError))
             {
-                Output.WriteLine("⚠️ GPG could not fully recognize the key");
-                Output.WriteLine("Note: IssuerFingerprint subpacket has been added, but GPG may still have issues");
+                Output.WriteLine("GPG List Public Keys Errors:");
+                Output.WriteLine(listError);
+            }
+            
+            // Also get human-readable output
+            var listHumanProcess = new Process
+            {
+                StartInfo = new ProcessStartInfo
+                {
+                    FileName = "gpg",
+                    Arguments = $"--homedir \"{tempDir}\" --list-keys --keyid-format=long",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                }
+            };
+            
+            listHumanProcess.Start();
+            var humanOutput = await listHumanProcess.StandardOutput.ReadToEndAsync();
+            await listHumanProcess.WaitForExitAsync();
+            
+            Output.WriteLine("\nGPG List Keys (Human Readable):");
+            Output.WriteLine(humanOutput);
+            
+            // Parse the --with-colons output to check if key is valid
+            bool keyFound = false;
+            bool keyIsValid = false;
+            bool uidFound = false;
+            
+            // Check both secret and public key listings
+            var combinedOutput = secretOutput + "\n" + listOutput;
+            
+            foreach (var line in combinedOutput.Split('\n'))
+            {
+                var parts = line.Split(':');
+                if (parts.Length > 1)
+                {
+                    // pub/sec line = public/secret key
+                    if (parts[0] == "pub" || parts[0] == "sec")
+                    {
+                        keyFound = true;
+                        // Field 2 is validity: o=unknown, -=invalid, e=expired, etc.
+                        // We want to see if it's at least imported (even if validity is unknown)
+                        Output.WriteLine($"Key validity: '{parts[1]}' (type: {parts[0]})");
+                    }
+                    // uid line = user ID
+                    else if (parts[0] == "uid")
+                    {
+                        uidFound = true;
+                        var uidValidity = parts.Length > 1 ? parts[1] : "";
+                        var uidValue = parts.Length > 9 ? parts[9] : "";
+                        Output.WriteLine($"User ID found: '{uidValue}' (validity: '{uidValidity}')");
+                        
+                        if (!string.IsNullOrEmpty(uidValue))
+                        {
+                            keyIsValid = true;
+                        }
+                    }
+                }
+            }
+            
+            Output.WriteLine($"\nKey found in GPG: {keyFound}");
+            Output.WriteLine($"User ID found: {uidFound}");
+            Output.WriteLine($"Key is valid: {keyIsValid}");
+            
+            // Assert the key was at least imported
+            Assert.True(keyFound || !string.IsNullOrWhiteSpace(humanOutput) || !string.IsNullOrWhiteSpace(secretOutput), 
+                "Key should be present in GPG keyring");
+            
+            // Check if GPG fully recognized the key with valid user ID
+            if (!keyIsValid || !uidFound)
+            {
+                Output.WriteLine("\n⚠️ GPG could not fully verify the key (no valid user IDs)");
+                Output.WriteLine("This indicates GPG cannot verify the self-signature");
+                Output.WriteLine("Issue: The signature may not be properly linked to the key");
             }
             else
             {
-                Output.WriteLine("✅ Key successfully imported and recognized by GPG!");
+                Output.WriteLine("\n✅ Key successfully imported and recognized by GPG!");
             }
         }
         finally

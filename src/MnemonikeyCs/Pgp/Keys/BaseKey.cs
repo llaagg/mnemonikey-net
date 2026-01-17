@@ -310,8 +310,20 @@ public abstract class Ed25519KeyBase : BaseKey
         keyPointWithPrefix[0] = 0x40; // EdDSA point prefix
         _publicKeyBytes.CopyTo(keyPointWithPrefix, 1);
         
-        // Calculate bit length for MPI encoding
-        var bitCount = keyPointWithPrefix.Length * 8;
+        // Calculate bit length for MPI encoding (must match PacketSerializer.WriteMPI logic)
+        // Count bits correctly - 0x40 prefix is 7 bits (0b01000000)
+        var significantBytes = keyPointWithPrefix.Length;
+        var bitCount = (significantBytes - 1) * 8;
+        var msb = keyPointWithPrefix[0];
+        if (msb >= 0x80) bitCount += 8;
+        else if (msb >= 0x40) bitCount += 7;  // 0x40 = 0b01000000 -> 7 bits
+        else if (msb >= 0x20) bitCount += 6;
+        else if (msb >= 0x10) bitCount += 5;
+        else if (msb >= 0x08) bitCount += 4;
+        else if (msb >= 0x04) bitCount += 3;
+        else if (msb >= 0x02) bitCount += 2;
+        else bitCount += 1;
+        
         keyMaterialStream.WriteByte((byte)((bitCount >> 8) & 0xFF));
         keyMaterialStream.WriteByte((byte)(bitCount & 0xFF));
         keyMaterialStream.Write(keyPointWithPrefix);
