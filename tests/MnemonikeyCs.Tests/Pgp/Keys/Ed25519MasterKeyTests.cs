@@ -25,7 +25,7 @@ public class Ed25519MasterKeyTests : TestBase
         Assert.Equal(KeyUsage.Certify | KeyUsage.Sign, masterKey.Usage);
         Assert.Equal(32, masterKey.PublicKeyBytes.Length);
         Assert.Equal(32, masterKey.PrivateKeyBytes.Length);
-        Assert.Equal(32, masterKey.Fingerprint.Length);
+        Assert.Equal(20, masterKey.Fingerprint.Length); // v4 keys use SHA-1 (20 bytes)
         Assert.Equal(8, masterKey.KeyId.Length);
     }
 

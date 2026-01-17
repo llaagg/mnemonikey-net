@@ -51,6 +51,11 @@ public sealed class SignaturePacket
     public byte[] SignatureBytes { get; private set; } = Array.Empty<byte>();
 
     /// <summary>
+    /// Gets the hash of the signed data (stored for left two bytes).
+    /// </summary>
+    private byte[] _computedHash = Array.Empty<byte>();
+
+    /// <summary>
     /// Initializes a new instance of the SignaturePacket class.
     /// </summary>
     /// <param name="signatureType">The signature type.</param>
@@ -76,7 +81,9 @@ public sealed class SignaturePacket
         _hashedSubpackets = new List<(SignatureSubpacketType, byte[], bool)>();
         _unhashedSubpackets = new List<(SignatureSubpacketType, byte[], bool)>();
 
-        // Add required subpackets
+        // Note: Subpacket order follows GPG defaults for compatibility
+        // Hashed subpackets will be ordered as: IssuerFingerprint, CreationTime, then others
+        // CreationTime is added here, but IssuerFingerprint must be added first by the caller
         AddHashedSubpacket(SignatureSubpacketType.SignatureCreationTime, 
             PacketSerializer.CreateSignatureCreationTimeSubpacket(creationTime));
         AddUnhashedSubpacket(SignatureSubpacketType.Issuer,
@@ -133,6 +140,7 @@ public sealed class SignaturePacket
 
         // Compute the hash
         byte[] hash = ComputeHash(fullSignatureData);
+        _computedHash = hash; // Store for left two bytes verification
 
         // Sign the hash
         SignatureBytes = signingKey.Sign(hash);
@@ -178,6 +186,12 @@ public sealed class SignaturePacket
             masterKey.CreationTime,
             masterKey.KeyId);
 
+        // Add issuer fingerprint subpacket FIRST (before CreationTime) per GPG ordering
+        var fingerprintData = new byte[1 + masterKey.Fingerprint.Length];
+        fingerprintData[0] = 4; // Version 4 key
+        masterKey.Fingerprint.CopyTo(fingerprintData, 1);
+        signature._hashedSubpackets.Insert(0, (SignatureSubpacketType.IssuerFingerprint, fingerprintData, false));
+
         // Add key flags subpacket
         signature.AddHashedSubpacket(SignatureSubpacketType.KeyFlags,
             PacketSerializer.CreateKeyFlagsSubpacket(keyFlags), critical: true);
@@ -220,7 +234,11 @@ public sealed class SignaturePacket
             HashAlgorithm.SHA256,
             subkey.CreationTime,
             masterKey.KeyId);
-
+        // Add issuer fingerprint subpacket FIRST (before CreationTime) per GPG ordering
+        var fingerprintData = new byte[1 + masterKey.Fingerprint.Length];
+        fingerprintData[0] = 4; // Version 4 key
+        masterKey.Fingerprint.CopyTo(fingerprintData, 1);
+        signature._hashedSubpackets.Insert(0, (SignatureSubpacketType.IssuerFingerprint, fingerprintData, false));
         // Add key flags subpacket
         signature.AddHashedSubpacket(SignatureSubpacketType.KeyFlags,
             PacketSerializer.CreateKeyFlagsSubpacket(keyFlags), critical: true);
@@ -410,8 +428,6 @@ public sealed class SignaturePacket
     /// <returns>The hash bytes.</returns>
     private byte[] ComputeHashForLeftBytes()
     {
-        // For now, return zeros - this would need proper implementation with the actual signed data
-        var hash = new byte[32];
-        return hash;
+        return _computedHash;
     }
 }

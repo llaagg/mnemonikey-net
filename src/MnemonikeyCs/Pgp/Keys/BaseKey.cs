@@ -328,8 +328,8 @@ public abstract class Ed25519KeyBase : BaseKey
         fingerprintStream.Write(lengthBytes);
         fingerprintStream.Write(keyMaterialBytes);
         
-        using var sha256 = System.Security.Cryptography.SHA256.Create();
-        return sha256.ComputeHash(fingerprintStream.ToArray());
+        using var sha1 = System.Security.Cryptography.SHA1.Create();
+        return sha1.ComputeHash(fingerprintStream.ToArray());
     }
 
     /// <inheritdoc />

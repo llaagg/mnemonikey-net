@@ -189,7 +189,7 @@ public class KeySetTests : TestBase
 
         // Assert
         Assert.NotNull(fingerprint);
-        Assert.Equal(32, fingerprint.Length); // SHA-256 hash
+        Assert.Equal(20, fingerprint.Length); // v4 keys use SHA-1 (20 bytes)
         Assert.Equal(keySet.MasterKey.Fingerprint, fingerprint);
     }
 

@@ -431,5 +431,10 @@ public enum SignatureSubpacketType : byte
     /// <summary>
     /// Embedded signature.
     /// </summary>
-    EmbeddedSignature = 32
+    EmbeddedSignature = 32,
+
+    /// <summary>
+    /// Issuer fingerprint (v4 or v5).
+    /// </summary>
+    IssuerFingerprint = 33
 }
